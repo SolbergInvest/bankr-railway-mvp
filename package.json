@@ -1,0 +1,11 @@
+{
+  "name": "bankr-railway-mvp",
+  "type": "module",
+  "private": true,
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "@bankr/sdk": "^0.1.0-alpha.5",
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}
