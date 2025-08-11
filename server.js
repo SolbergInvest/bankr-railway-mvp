@@ -1,10 +1,13 @@
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const { body, param, validationResult } = require('express-validator');
-const winston = require('winston');
-require('dotenv').config();
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { body, param, validationResult } from 'express-validator';
+import winston from 'winston';
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
 
 // Initialize logger
 const logger = winston.createLogger({
@@ -31,19 +34,52 @@ const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
 let bankrClient = null;
 let bankrClientError = null;
 
-// Initialize Bankr client with error handling
+// Initialize Bankr client with enhanced error handling
 if (missingEnvVars.length > 0) {
   bankrClientError = `Missing required environment variables: ${missingEnvVars.join(', ')}`;
   logger.warn('Bankr client not initialized - missing environment variables', { missingEnvVars });
 } else {
   try {
-    const { BankrClient } = require('@bankr/sdk');
+    // Try multiple import approaches for better compatibility
+    let BankrClient;
+    
+    try {
+      // First try: Standard ES module import
+      const bankrModule = await import('@bankr/sdk');
+      BankrClient = bankrModule.BankrClient || bankrModule.default;
+    } catch (importError) {
+      logger.warn('Standard ES import failed, trying alternative approaches', { error: importError.message });
+      
+      try {
+        // Second try: Direct client import
+        const clientModule = await import('@bankr/sdk/dist/client.js');
+        BankrClient = clientModule.BankrClient || clientModule.default;
+      } catch (clientError) {
+        logger.warn('Direct client import failed', { error: clientError.message });
+        
+        try {
+          // Third try: CommonJS-style dynamic import
+          const { createRequire } = await import('module');
+          const require = createRequire(import.meta.url);
+          const bankrModule = require('@bankr/sdk');
+          BankrClient = bankrModule.BankrClient || bankrModule.default;
+        } catch (requireError) {
+          throw new Error(`All import methods failed. Last error: ${requireError.message}`);
+        }
+      }
+    }
+    
+    if (!BankrClient) {
+      throw new Error('BankrClient constructor not found in imported module');
+    }
+    
     bankrClient = new BankrClient({
       apiKey: process.env.BANKR_API_KEY,
       privateKey: process.env.PRIVATE_KEY,
       walletAddress: process.env.WALLET_ADDRESS,
       network: 'base'
     });
+    
     logger.info('Bankr client initialized successfully');
   } catch (error) {
     bankrClientError = `Failed to initialize Bankr client: ${error.message}`;
@@ -222,7 +258,7 @@ app.post('/api/prompt', [
       return res.status(503).json(formatErrorResponse(
         'SERVICE_UNAVAILABLE',
         'Bankr service not properly configured',
-        'Please ensure all required environment variables are set'
+        'Please ensure all required environment variables are set and the Bankr SDK is properly installed'
       ));
     }
     
@@ -281,7 +317,7 @@ app.get('/api/job/:jobId', [
       return res.status(503).json(formatErrorResponse(
         'SERVICE_UNAVAILABLE',
         'Bankr service not properly configured',
-        'Please ensure all required environment variables are set'
+        'Please ensure all required environment variables are set and the Bankr SDK is properly installed'
       ));
     }
     
@@ -365,7 +401,7 @@ app.post('/api/prompt-and-wait', [
       return res.status(503).json(formatErrorResponse(
         'SERVICE_UNAVAILABLE',
         'Bankr service not properly configured',
-        'Please ensure all required environment variables are set'
+        'Please ensure all required environment variables are set and the Bankr SDK is properly installed'
       ));
     }
     
@@ -418,7 +454,7 @@ app.get('/api/allowance', async (req, res) => {
       return res.status(503).json(formatErrorResponse(
         'SERVICE_UNAVAILABLE',
         'Bankr service not properly configured',
-        'Please ensure all required environment variables are set'
+        'Please ensure all required environment variables are set and the Bankr SDK is properly installed'
       ));
     }
     
@@ -468,7 +504,7 @@ app.post('/api/approve', [
       return res.status(503).json(formatErrorResponse(
         'SERVICE_UNAVAILABLE',
         'Bankr service not properly configured',
-        'Please ensure all required environment variables are set'
+        'Please ensure all required environment variables are set and the Bankr SDK is properly installed'
       ));
     }
     
@@ -498,6 +534,32 @@ app.get('/api/config', (req, res) => {
       }
     },
     timestamp: new Date().toISOString()
+  });
+});
+
+// SDK debug endpoint - helps diagnose import issues
+app.get('/api/debug/sdk', async (req, res) => {
+  const debugInfo = {
+    timestamp: new Date().toISOString(),
+    nodeVersion: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    bankrClientStatus: !!bankrClient,
+    bankrClientError: bankrClientError
+  };
+
+  // Try to get SDK version and info
+  try {
+    const packageInfo = await import('@bankr/sdk/package.json', { assert: { type: 'json' } });
+    debugInfo.sdkVersion = packageInfo.default.version;
+    debugInfo.sdkName = packageInfo.default.name;
+  } catch (error) {
+    debugInfo.sdkPackageError = error.message;
+  }
+
+  res.json({
+    success: true,
+    debug: debugInfo
   });
 });
 
@@ -552,5 +614,5 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
-module.exports = app;
+export default app;
 
