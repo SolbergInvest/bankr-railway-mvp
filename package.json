@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Railway Node.js service for Bankrbot SDK integration",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
