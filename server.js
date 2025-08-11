@@ -1,18 +1,19 @@
 import express from "express";
 import cors from "cors";
 import { BankrClient } from "@bankr/sdk";
+import { maxUint256 } from "viem";
 
 const {
   PORT = 3000,
   BANKR_API_KEY,
   BANKR_PRIVATE_KEY,
-  BANKR_BASE_URL,         // optional, defaults to https://api-staging.bankr.bot
-  BANKR_PROXY_TOKEN,      // optional shared secret for your frontend
-  CORS_ORIGIN             // optional, e.g. "https://your.site,https://staging.site"
+  BANKR_BASE_URL,     // optional
+  BANKR_PROXY_TOKEN,  // optional shared secret
+  CORS_ORIGIN         // optional CSV of allowed origins
 } = process.env;
 
 if (!BANKR_API_KEY || !BANKR_PRIVATE_KEY) {
-  throw new Error("BANKR_API_KEY and BANKR_PRIVATE_KEY are required");
+  throw new Error("Missing BANKR_API_KEY or BANKR_PRIVATE_KEY");
 }
 
 const client = new BankrClient({
@@ -24,18 +25,33 @@ const client = new BankrClient({
 const app = express();
 app.use(express.json());
 app.use(cors({
-  origin: CORS_ORIGIN ? CORS_ORIGIN.split(",") : true,
-  credentials: false
+  origin: CORS_ORIGIN ? CORS_ORIGIN.split(",") : true
 }));
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
-app.post("/api/bankr/prompt", async (req, res) => {
+// One-time BNKR allowance to the facilitator (for x402 per-request payments)
+app.post("/api/bankr/approve-bnkr", async (req, res) => {
   try {
     if (BANKR_PROXY_TOKEN && req.get("x-proxy-token") !== BANKR_PROXY_TOKEN) {
       return res.status(401).json({ error: "unauthorized" });
     }
-    const { prompt, walletAddress, xmtp, poll } = req.body ?? {};
+    const spender = "0x4a15fc613c713FC52E907a77071Ec2d0a392a584";
+    const txHash = await client.approve(spender, maxUint256);
+    const allowance = await client.checkAllowance(spender);
+    res.json({ txHash, allowance: allowance.toString(), wallet: client.getWalletAddress() });
+  } catch (e) {
+    res.status(500).json({ error: e?.message ?? "unknown error" });
+  }
+});
+
+// Main endpoint: call Bankr and wait for completion
+app.post("/api/bankr/promptAndWait", async (req, res) => {
+  try {
+    if (BANKR_PROXY_TOKEN && req.get("x-proxy-token") !== BANKR_PROXY_TOKEN) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    const { prompt, walletAddress, xmtp } = req.body ?? {};
     if (!prompt || typeof prompt !== "string") {
       return res.status(400).json({ error: "prompt is required" });
     }
@@ -43,9 +59,9 @@ app.post("/api/bankr/prompt", async (req, res) => {
       prompt,
       walletAddress,
       xmtp,
-      interval: poll?.interval ?? 2000,
-      maxAttempts: poll?.maxAttempts ?? 150,
-      timeout: poll?.timeout ?? 300_000
+      interval: 2000,
+      maxAttempts: 150,
+      timeout: 300000
     });
     res.json({
       jobId: result.jobId,
@@ -54,26 +70,9 @@ app.post("/api/bankr/prompt", async (req, res) => {
       transactions: result.transactions ?? [],
       richData: result.richData ?? []
     });
-  } catch (err) {
-    res.status(500).json({ error: err?.message ?? "unknown error" });
+  } catch (e) {
+    res.status(500).json({ error: e?.message ?? "unknown error" });
   }
 });
 
-// (Optional) manual BNKR approval helper if your first call returns a 402 with a facilitator address
-app.post("/api/bankr/approve", async (req, res) => {
-  try {
-    if (BANKR_PROXY_TOKEN && req.get("x-proxy-token") !== BANKR_PROXY_TOKEN) {
-      return res.status(401).json({ error: "unauthorized" });
-    }
-    const { spender, amount } = req.body ?? {};
-    if (!spender) return res.status(400).json({ error: "spender is required" });
-    const txHash = await client.approve(spender, amount ? BigInt(amount) : undefined);
-    res.json({ txHash, wallet: client.getWalletAddress() });
-  } catch (err) {
-    res.status(500).json({ error: err?.message ?? "unknown error" });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`Bankr proxy listening on :${PORT}`);
-});
+app.listen(PORT, () => console.log(`Bankr proxy on :${PORT}`));
